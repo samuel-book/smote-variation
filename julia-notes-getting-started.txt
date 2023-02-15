@@ -1,0 +1,54 @@
+Editors:
++ Pluto https://github.com/fonsp/Pluto.jl
+  + To install Pluto, `add Pluto`.
++ Jupyter notebook https://datatofish.com/add-julia-to-jupyter/
+  + To add Julia to the existing Jupyter installation: 
+    + in the Julia command line, enter `using Pkg` and then `Pkg.add(IJulia)`.
+    + in the normal command line, enter `python3 -m pip install --upgrade webio_jupyter_extension`
+    + (Not worth this step:) To get plotly working, have to downgrade the WebIO package: `add WebIO@0.7.0`
++ Make sure the environment has the packages for these installed: `add Pluto` and `add IJulia`.
+
+
+-----
+Run the notebook in the right environment from the command line (not the Julia command line):
++ Pluto: `julia --project=. -e "using Pluto; Pluto.run()"`
++ Jupyter: `julia --project=. -e "using IJulia; notebook(dir=pwd())"`
++ Jupyter lab: ??? It seems to just pull through the right environment by itself.
+
+
+-----
+Environments
++ Package information is stored in Project.toml and Manifest.toml
+
+
+Activate the environment
+For some reason(??) to not create a new environment each time, have to run `activate synthetic_data` from the directory ABOVE synthetic_data. Why??
+Notes from https://towardsdatascience.com/how-to-setup-project-environments-in-julia-ec8ae73afe9c
++ Start Julia in the command line
++ Make sure you're in the right directory (type `pwd()`, and then `cd("synthetic_data")` or similar if necessary).
++ Open the package manager by typing `]` (yes, only the right square bracket symbol).
++ Activate the environment by taking `activate synthetic_data`
++ Close the package manager with backspace or ctrl+c.
+
+
+New environment:
+Notes from https://towardsdatascience.com/how-to-setup-project-environments-in-julia-ec8ae73afe9c
++ To generate a new environment, open the package manager and type `generate synthetic_data` if synthetic_data is the project name. This creates a Project.toml file. 
+
+
+Add packages to environment:
+Notes from https://towardsdatascience.com/how-to-setup-project-environments-in-julia-ec8ae73afe9c
++ In the pkg command line, e.g. `add Distributions`. For specific versions, `add Distributions@X.XX.X` for version X.XX.X.
++ Remove packages with `remove` instead of `add`.
+
+
+Update environment:
+Notes from https://towardsdatascience.com/how-to-setup-project-environments-in-julia-ec8ae73afe9c
++ In the pkg command line, type `update`.
+
+
+-----
+Plotting packages
++ PyPlot works in Pluto and Jupyter, but does not work when running a Pluto file in binder.
++ Plotly works in Pluto and Jupyter, but the output does not display when the file is viewed in GitHub.
++ Plots with the default gr() backend works in Pluto and Jupyter.
