@@ -26,6 +26,8 @@ begin
 	using StatsBase
 	# For nearest-neighbour searches:
 	using NearestNeighbors
+	# For generating random directions:
+	using LinearAlgebra: norm
 end
 
 # ╔═╡ 78249b6e-9d72-11ed-2c77-a51efb914f64
@@ -310,11 +312,27 @@ Julia notes:
 """
 
 # ╔═╡ 6471625a-9691-452d-aa2c-f77215a33dae
-function get_random_angles(M; random_seed=42)
+# function get_random_angles(M; random_seed=42)
+function get_random_directions(M; random_seed=42)
 	# Set random seed
 	Random.seed!(random_seed)
 	# Define angles:
-	angles_random = 2 * pi * rand(M)
+	# angles_random = 2 * pi * rand(M)
+	
+	# Put the vectors in here:
+	vector_normal_2D_list = []
+	for i in range(1, M)
+		# Define random vector:
+		vector_normal_2D = rand(Normal(), 2)
+		# Divide by its norm (a.k.a. magnitude):
+		vector_normal_2D /= norm(vector_normal_2D)
+		# Add it to the list:
+		push!(vector_normal_2D_list, vector_normal_2D)
+	end
+
+	# Convert to a sliceable matrix by splatting (...) and then
+	# h-concatenating the result:
+	vector_normal_2D_array = hcat(vector_normal_2D_list...)
 end
 
 # ╔═╡ d4aad585-d916-49b9-bca1-d0bbc1212103
@@ -338,15 +356,18 @@ Julia notes:
 function make_synth_coords(
 		coords_base,
 		distances_synth,
-		angles_random,
+		# angles_random,
+		vectors_random,
 		indices_random
 	)
 	"""
 	Probably want coords_base to be standardised at this point.
 	"""
 	# Find the shifts from the real data coordinates.
-	x_shifts = distances_synth .* cos.(angles_random)
-	y_shifts = distances_synth .* sin.(angles_random)
+	# x_shifts = distances_synth .* cos.(angles_random)
+	# y_shifts = distances_synth .* sin.(angles_random)
+	x_shifts = distances_synth .* vectors_random[1, :]
+	y_shifts = distances_synth .* vectors_random[2, :]
 	
 	coords_synth = copy(transpose(hcat(
 		coords_base[1, indices_random] + x_shifts,
@@ -422,12 +443,14 @@ function create_synth_data_from_base(
 		sigma=0.4242
 	)
 	# Step 7:
-	angles_random = get_random_angles(M, random_seed=random_seed)
+	# angles_random = get_random_angles(M, random_seed=random_seed)
+	vectors_random = get_random_directions(M, random_seed=random_seed)
 	# Step 8:
 	coords_synth_standardised = make_synth_coords(
 		coords_base_standardised,
 		distances_synth,
-		angles_random,
+		vectors_random,
+		# angles_random,
 		indices_random
 	)
 	# Step 9:
@@ -884,6 +907,7 @@ end
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 NearestNeighbors = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
@@ -903,7 +927,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.8.5"
 manifest_format = "2.0"
-project_hash = "c8b1f4561a1321a13f2664308b264b13742e10a5"
+project_hash = "8dc685c1040f8553624e0e510812de895c713b55"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
