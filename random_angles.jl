@@ -4,897 +4,414 @@
 using Markdown
 using InteractiveUtils
 
-# ╔═╡ f3409cd7-185b-4a35-925e-0d38ea1de729
-# Import packages
+# ╔═╡ 18c9ac0f-6954-4ee3-98bd-5587a3d74601
 begin
-	# Basics:
-	using Distributions
-	using Statistics
-	#using Mathematics
-	# For kth-nearest-neighbour:
-	# using Distances
-	# For setting a random seed:
-	using Random
-	# For plotting:
-	# using PlotlyBase
-	# using PlotlyJS
-	# using PyPlot
-	using Plots
-	# Backend for the Plots package:
-	gr()
-	# For randomly sampling from an array:
-	using StatsBase
-	# For nearest-neighbour searches:
-	using NearestNeighbors
+    using Random: rand, seed!
+	using Distributions: Normal
+	using LinearAlgebra: norm, acos, asin
+	using Plots: gr, scatter, plot, plot!, histogram!,
+	                xlabel!, ylabel!, zlabel!, 
+	                xlims!, ylims!, zlims!
+	# Backend for the Plots package is gr
+	# gr()
 end
 
-# ╔═╡ 78249b6e-9d72-11ed-2c77-a51efb914f64
+# ╔═╡ 01f723a3-3978-4fab-962b-22b278e4cfc6
 md"""
-# Variation on SMOTE
+# Random angle generation
 """
 
-# ╔═╡ a35d9b03-162f-4367-9360-f751e7a42963
-md"""## Setup:"""
-
-# ╔═╡ d15f0f81-ab21-4ad8-95ea-393ca4ba46c9
+# ╔═╡ f36f5920-6f0c-41c8-a7e1-2cfc7f9bc2a5
 md"""
-### Distances from real points
-
-Select an option for determining the distances of the synthetic points from the real data.
-
-For all options, all synthetic points are at the nearest-neighbour distance of their real counterparts scaled by a factor $\gamma$. The options change the value of $\gamma$:
-
-1. $\gamma=1$
-2. $\gamma=\left(\frac{N-1}{M}\right)^\frac{1}{d}$
-3. Sample $\gamma$ from the normal distribution $\log\left(\gamma_i\right) \sim \mathcal{N}\left(\frac{1}{d} \log{\frac{N-1}{M}}, \sigma^{2}  \right)$.
+## Imports
 """
 
-# ╔═╡ 40f0420c-6998-4264-8cf9-16291ea03e52
-option_distance = 3
-
-# ╔═╡ 5269cdf0-2a11-4d1b-803a-78a2c7231d35
-md"""### Number of points"""
-
-# ╔═╡ d860a3e7-958f-4919-9db5-658b58ed6b20
+# ╔═╡ 08bbf92d-cd5a-4e56-816a-0d50f80de7bf
 begin
-	# Number of real samples:
-	N = 100
-	# Number of synthetic points:
-	M = 1000
+	# Make this many points...
+	M = 100
+	# ... at this distance from the origin:
+	radius = 1
+	# And set this random seed for repeatability:
+    random_seed = 42
 end
 
-# ╔═╡ 6e1d209c-8080-4450-95a1-779ba5958c5e
+# ╔═╡ 8ba67bee-47aa-4fc7-89e1-4406dcbb6af4
 md"""
-## Make the real data points
+## 2D
 
-First create the distribution that the points will be sampled from:
+Generate points on a ring:
+1. from the rand() function
+2. by sampling the normal distribution
 """
 
-# ╔═╡ 199a9109-2919-47e4-8b20-f1a1eb311177
-# Set up a 2D Gaussian distribution.
+# ╔═╡ a7e6e39e-24c8-476a-aab1-04ef027ce31d
+md"""### Random"""
+
+# ╔═╡ 37b2b812-b100-11ed-2447-3b9083ab9792
 begin
-	# Mean in x, mean in y
-	prob_density_mean = [50, 2]
-	# Spread in x, covariance with y(?);
-	# spread in y, covariance with x(?)
-	prob_density_c = [1 0.8; 0.8 1] #[10 0.8; 0.8 1]
-	# Create this MultiVariate Normal dist:
-	prob_density_function = MvNormal(prob_density_mean, prob_density_c)
-end
-
-# ╔═╡ 3623d487-93ae-4a23-a316-9490889173d8
-md"""Then sample a set of `N` real coordinates."""
-
-# ╔═╡ 1061dd5b-9a6a-4319-90d8-3c9c59ab92f6
-begin
-	Random.seed!(42)
-	# Sample N sets of coordinates from the 2D Gaussian:
-	coords_real = rand(prob_density_function, N)
-	# Number of dimensions:
-	d = size(coords_real)[1]
-end
-
-# ╔═╡ 012824a4-deac-4f3a-95b8-cd349077c6e6
-md"""
-Julia notes:
-
-+ To extract coordinates for one data point, use `real_coords[:, 1]`. 
-
-+ The x-coordinates of all points are `real_coords[1, :]`. 
-
-+ The y-coordinates of all points are `real_coords[2, :]`.
-"""
-
-# ╔═╡ 98d1178d-2936-4fd6-82d9-ac5fa5b4f637
-md"""
-## Make the synthetic data
-
-We'll define functions for various steps towards making the synthetic data, and later bring them all together in a wrapper function.
-
-| Step | Function | Description |
-| --- | --- | --- |
-| 1 | `standardise_base` | Standardise the base data |
-| 2 | `find_sorted_neighbour_distances` | Find the distances from all base coordinates to all other base coordinates. For N coords, gives an NxN array. The resulting array is sorted so the first row contains the distances to the each point's nearest neighbour (itself). |
-| 3 | `get_indices_of_base_points` | Allocate synthetic points to real points |
-| 4 | `get_indices_of_neighbours` | Select which of the five nearest neighbours to use. Different choice for each synthetic point. |
-| 5 | `get_distances_to_nth_neighbours` | Find the distances to the nth nearest neighbours from Step 2. |
-| 6 | `make_distances_from_base_points` | Define new distances from the base points to the new point using the $\gamma$ scale factor. |
-| 7 | `get_random_angles` | Define random angles between each synthetic point and its base point. |
-| 8 | `make_synth_coords` | Create the synthetic points by combining the angles and distances above with the base data.  |
-| 9 | `unstandardise_synth` | Remove standardisation from synth data. |
-"""
-
-# ╔═╡ 27d9108f-6ec8-4b0f-8ec3-1a05e4a11064
-md"""
-### 1. Standardise the base data
-
-Standardise by subtracting the mean and dividing by the standard deviation.
-"""
-
-# ╔═╡ 96747592-972b-431e-891f-879a3695ad6a
-function standardise_base(coords_base, d)
-	mean_base = mean(coords_base, dims=d)
-	std_base = std(coords_base, dims=d)
-	# Keep the . in front of the operators for element-wise operation.
-	coords_base_standardised = (coords_base .- mean_base) ./ std_base
-
-	# Sanity check
-	for (i, axis) in enumerate(["x", "y"])
-		if round(std(coords_base_standardised[i, :]), digits=7) != 1
-			print("Error in std in ", axis, "\n")
-		end
-		if round(mean(coords_base_standardised[i, :]), digits=7) != 0
-			print("Error in mean in ", axis, "\n")
-		end
-	end
-
-	return coords_base_standardised, mean_base, std_base
-end
-
-# ╔═╡ 6b279292-6195-4a86-8185-18833c032c7d
-md"""
-### 2: Calculate average nearest-neighbour distance
-"""
-
-# ╔═╡ 836e7b57-cfcd-45ca-8eb4-534aca5c563a
-function find_sorted_neighbour_distances(coords_base; d=2)
-	"""
-	Input coords should be standardised.
-	
-	The average nth nearest-neighbour distance is the mean of the values in row n.
-	"""
-	# Get distance from each point to every other point.
-	# The result is an NxN array if coords_base has N coords in it:
-	all_distances = pairwise(Euclidean(), coords_base, dims=d)
-	# Sort the full array so that the first row contains 
-	# the distance from each point to itself (=zero), 
-	# the second row contains the distance from each point 
-	# to its nearest neighbour, the third row the distance to the 
-	# second-nearest neighbour and so on.
-	sorted_distances = sort(all_distances, dims=1)
-	# The list of nearest-neighbour distances (where each real data point gets a different distance) is:
-	# distances_1st_nearest_real = sorted_distances[2, :]
-	return sorted_distances
-end
-
-# ╔═╡ f9ebe451-2eeb-4675-918d-7cbf23fa616d
-md"""
-### 3. Allocate synthetic points to real points
-
-Decide which real data point will be used to generate each synthetic point. Currently these indices are selected at random. 
-
-Julia notes:
-
-+ `rand(1:N, M)` generates `M` values. Each value is in the range `1:N`.
-+ The `return` statement is optional in this case. Default behaviour without a `return` line is to return the last thing defined in the function.
-"""
-
-# ╔═╡ 4c90f881-c058-4bb4-ba77-62f74f996478
-function get_indices_of_base_points(N, M; random_seed=42)
-	# Set the random seed:
-	Random.seed!(random_seed)
-	# Define indices:
-	indices_random = rand(1:N, M)
-	return indices_random
-end
-
-# ╔═╡ 148c7d7c-00ab-44c6-8271-867090f6bdb3
-md"""
-### 4. Select which of the n$^{\mathrm{th}}$ nearest neighbours to use
-"""
-
-# ╔═╡ a85ace51-d5ba-459b-ab92-ed4d75b71c4b
-function get_indices_of_neighbours(M; random_seed=42)
-	# Set the random seed:
-	Random.seed!(random_seed)
-	# Define indices
-	# Randomly pick one of the five nearest neighbours:
-	indices_neighbours = rand(2:6, M)
-	# Randomly pick any of the other points:
-	# indices_neighbours = rand(2:N, M)
-	# Pick only the xth point:
-	# indices_neighbours = fill(6, M)
-	# Randomly pick either the nearest or farthest point:
-	# indices_neighbours = StatsBase.sample([2, N], M)
-	return indices_neighbours
-end
-
-# ╔═╡ 8099cd6e-74c1-4411-b8da-0f6e5a37284c
-md"""
-### 5. Get distances to the n$^{\mathrm{th}}$ neighbours
-"""
-
-# ╔═╡ 39922ca7-b567-4c86-8fbc-ccb732504434
-function get_distances_to_nth_neighbours(
-		sorted_distances_base,
-		indices_neighbours,
-		indices_random
-	)
-	"""
-	Create a list of distances between the base points and their nth neighbours,
-	where the points and the choice of neighbours are selected with the input
-	lists of indices.
-	"""
-	# Find the distances to these neighbours:
-	distances_nearest = []
-	for i in range(1, size(indices_neighbours)[1])
-		distance_here = sorted_distances_base[
-			indices_neighbours[i], indices_random[i]
-		]
-		push!(distances_nearest, distance_here)
-	end
-	return distances_nearest
-end
-
-# ╔═╡ 9fe64e5c-dfdf-447f-9bfb-403e0c8c30ac
-md"""
-### 6. Define distances from base points to new points
-
-Julia notes:
-+ The dot in exp.(...) performs the exponential element-wise on everything in "...".
-+ The semi-colon in the input arguments goes before the first keyword argument.
-"""
-
-# ╔═╡ d956b888-b453-44f9-a675-73dd492e3d2e
-function make_distances_from_base_points(
-	distances_from_base,
-	N,
-	M;
-	d=2,
-	option_distance=1,
-	sigma=0.4242
-	)
-	if option_distance == 1
-		distances_synth = distances_from_base
-		
-	elseif option_distance == 2
-	    gamma = ((N-1)/M)^(1/d)
-		distances_synth = gamma * distances_from_base
-		
-	elseif option_distance == 3
-		# Define a normal distribution with mean 
-		# (1/d)*log([N-1] / M) and standard deviation "sigma" of our choice.
-		# Then sample M values from this distribution.
-		scale_factors = 
-			# Take the exponential...
-			exp.(
-				# Of these random numbers:
-				rand(
-					# The normal distribution we're sampling from:
-					Normal(
-						# Mean of the distribution:
-						(1/d)*log((N-1)/M), 
-						# Standard deviation:
-						sigma
-						),
-					# Sample this many values:
-					M
-					)
-				)
-		# Multiply these scale factors by the nearest-neighbour distances:
-		distances_synth = scale_factors .* distances_from_base
-	end
-	return distances_synth
-end
-
-# ╔═╡ c22ef8c8-0f20-41f7-bf2b-999c7bf94ba4
-md"""
-### 7. Define random directions
-
-Take as many random angles as there are data points. These angles range from 0 to 2$\pi$ radians. 
-
-Julia notes:
-
-+ The `rand(M)` generates `M` values in the range 0 to 1.
-
-"""
-
-# ╔═╡ 6471625a-9691-452d-aa2c-f77215a33dae
-function get_random_angles(M; random_seed=42)
 	# Set random seed
-	Random.seed!(random_seed)
-	# Define angles:
-	angles_random = 2 * pi * rand(M)
-end
-
-# ╔═╡ d4aad585-d916-49b9-bca1-d0bbc1212103
-md"""
-### 8. Create the synthetic data
-
-Create `synth_coords`, which contains `M` sets of (x, y) coordinates. 
-
-Julia notes:
-
-+ `cos.` takes the cosine of each angle in the input array. Just `cos` without the "`.`" fails.
-
-+ The `.*` operator needs the `.` for element-wise operation. The first distance is multiplied by the first angle, the second by the second, and so on.
-
-+ Transpose the array to make the shape 2xM instead of the default Mx2 output from `hcat` (~python's hstack), so that the dimension containing (x,y) matches that of `real_coords`.
-
-+ Copy the transposed array to change the type from `transpose(::Matrix{Float64}) with eltype Float64` to just `Matrix{Float64}`.
-"""
-
-# ╔═╡ 1e92cea5-e980-417b-a7ac-407a648503d7
-function make_synth_coords(
-		coords_base,
-		distances_synth,
-		angles_random,
-		indices_random
-	)
-	"""
-	Probably want coords_base to be standardised at this point.
-	"""
-	# Find the shifts from the real data coordinates.
-	x_shifts = distances_synth .* cos.(angles_random)
-	y_shifts = distances_synth .* sin.(angles_random)
+	seed!(random_seed)
+	# Define angles from -180 to 180 deg:
+	azi_random = pi .- (2 * pi * rand(M))
 	
-	coords_synth = copy(transpose(hcat(
-		coords_base[1, indices_random] + x_shifts,
-		coords_base[2, indices_random] + y_shifts
-	)))
-	return coords_synth
+	# Find the shifts from the origin.
+	x_random_2D = radius .* cos.(azi_random)
+	y_random_2D = radius .* sin.(azi_random)
 end
 
-# ╔═╡ 2741adb2-4ceb-47c9-ac78-7cef038e7371
-md"""
-### 9. Undo the standardisation
-"""
+# ╔═╡ a4824cf3-485f-42fd-963e-2992e9999701
+md"""### Normal"""
 
-# ╔═╡ 989369dd-aaf5-4e63-9ea8-956008db525f
-function unstandardise_synth(
-		coords_synth_standardised, 
-		std_base, 
-		mean_base
-	)
-	coords_synth = coords_synth_standardised .* std_base .+ mean_base
-	return coords_synth
-end
-
-# ╔═╡ ada78b87-3e16-4c5e-9f5b-c2ed17805ec1
-md"""
-## Combined function for synthetic data creation
-"""
-
-# ╔═╡ 3e3ce823-7c8e-4f24-9383-2eb3ff17fcac
-function create_synth_data_from_base(
-		coords_base,
-		M;
-		option_distance=1,
-		random_seed=42
-	)
-	"""
-	Inputs:
-	coords_base     - Starting coordinates.
-	M               - number of synthetic points to create.
-	option_distance - which gamma scaling factor to use. 
-	                  Values are 1, 2, 3 and match the cell near the top
-	                  of this notebook.
-	random_seed     - For generating the same results each time.
-	"""
-	# N is the number of base coordinates.
-	N = size(coords_base)[2]
-	# d is the number of dimensions of the base coordinates.
-	d = size(coords_base)[1]
-	
-	# Step 1:
-	coords_base_standardised, mean_base, std_base = 
-		standardise_base(coords_base, d)
-	# Step 2:
-	sorted_distances_base = find_sorted_neighbour_distances(
-		coords_base_standardised, d=d)
-	# Step 3:
-	indices_random = get_indices_of_base_points(N, M, random_seed=random_seed)
-	# Step 4:
-	indices_neighbours = get_indices_of_neighbours(M, random_seed=random_seed)
-	# Step 5:
-	distances_from_base = get_distances_to_nth_neighbours(
-		sorted_distances_base,
-		indices_neighbours,
-		indices_random
-	)
-	# Step 6:
-	distances_synth = make_distances_from_base_points(
-		distances_from_base,
-		N,
-		M,
-		d=d,
-		option_distance=option_distance,
-		sigma=0.4242
-	)
-	# Step 7:
-	angles_random = get_random_angles(M, random_seed=random_seed)
-	# Step 8:
-	coords_synth_standardised = make_synth_coords(
-		coords_base_standardised,
-		distances_synth,
-		angles_random,
-		indices_random
-	)
-	# Step 9:
-	coords_synth = unstandardise_synth(
-		coords_synth_standardised, 
-		std_base,
-		mean_base
-	)
-
-	# Keep track of the real data points used 
-	# to create each synthetic point in the following array.
-	# The real data can be sampled more than once.
-	coords_base_for_synth = coords_base[:, indices_random]
-	return coords_synth, coords_base_for_synth, coords_synth_standardised
-end
-
-# ╔═╡ 7aa64e01-8e92-4110-9b6b-041766a9a9ba
-md"""
-## Create synthetic data
-
-We'll create a few different sets of synthetic data.
-
-| Set | Generated from | Description |
-| --- | --- | --- |
-| `_synth` | `_real` | Synthetic |
-| `_synth2` | `_synth` | Double-synthetic |
-| `_synth3` | `_synth` | Triple-synthetic |
-"""
-
-# ╔═╡ 484e61cd-e0e7-4abc-81cd-c1ad04edf7f2
-# Synthetic:
-coords_synth, coords_real_for_synth, coords_synth_standardised =
-	create_synth_data_from_base(
-		coords_real,                      # Base new points on these coords
-		M,                                # Number of points
-		option_distance=option_distance,  # Gamma scaling factor
-		random_seed=42                    # Random seed for repeatability
-	)
-
-# ╔═╡ b220f5c9-de8e-4f78-9712-2edcf8dc2e53
-# Double synthetic:
-coords_synth2, coords_synth_for_synth2, coords_synth2_standardised =
-	create_synth_data_from_base(
-		coords_synth,                     # Base new points on these coords
-		M,                                # Number of points
-		option_distance=option_distance,  # Gamma scaling factor
-		random_seed=42                    # Random seed for repeatability
-	)
-
-# ╔═╡ 279cf589-0e85-441c-b309-dd470c25e656
-# Triple synthetic:
-coords_synth3, coords_synth2_for_synth3, coords_synth3_standardised =
-	create_synth_data_from_base(
-		coords_synth2,                    # Base new points on these coords
-		M,                                # Number of points
-		option_distance=option_distance,  # Gamma scaling factor
-		random_seed=42                    # Random seed for repeatability
-	)
-
-# ╔═╡ 43bb6106-874c-4857-8900-ee9185fcb1fd
-md"""### Gather the coordinates"""
-
-# ╔═╡ 0f81692d-2ede-4c21-a3b1-a35c36d67723
+# ╔═╡ 4a800091-0694-4f1e-98e4-3d18543672dd
 begin
-	# Setup for the following plots
-	# Coordinates for the scatter plot:
-	coords_datasets = [
-		coords_real,
-		coords_synth,
-		coords_synth2,
-		coords_synth3
-	]
-	# Each synthetic point is based off these points:
-	coords_base_data = [
-		# -- nothing for real data,
-		coords_real_for_synth,
-		coords_synth_for_synth2,
-		coords_synth2_for_synth3
-	]
-end
+	# Set random seed
+	seed!(random_seed)
 
-# ╔═╡ 57609186-5331-4f3b-a648-31afa38c823e
-md"""
-## Nearest-neighbour searches
-"""
+	# Put the vectors in here:
+	vector_normal_2D_list = []
+	for i in range(1, M)
+		# Define random vector:
+		vector_normal_2D = rand(Normal(), 2)
+		# Divide by its norm (a.k.a. magnitude):
+		vector_normal_2D /= norm(vector_normal_2D)
+		# Add it to the list:
+		push!(vector_normal_2D_list, vector_normal_2D)
+	end
 
-# ╔═╡ 94c7164e-f1ca-41be-ab7b-98950f279573
-md"""
-### Build tree for distances to real points
-
-First explicitly define the standardised version of the real data:
-"""
-
-# ╔═╡ 42af1204-8422-4b08-ae2c-9c9646ab3a1f
-coords_real_standardised, mean_real, std_real = 
-	standardise_base(coords_real, size(coords_real)[1])
-
-# ╔═╡ d15afb2a-5c45-4f7f-9ead-18b1c873a907
-md"""Build a tree using the NearestNeighbors package:"""
-
-# ╔═╡ 23cfd495-db72-4cea-8e50-4dc2c84bb124
-kdtree = KDTree(coords_real_standardised)
-
-# ╔═╡ 01fa93d7-14db-49db-8873-15599a542ec7
-md"""
-### Calculate the distances
-
-Compare the following sets of distances:
-+ Real to real
-+ Synthetic to real
-+ Double synthetic to real
-+ Triple synthetic to real
-
-Define this function to save some copy and pasting:
-"""
-
-# ╔═╡ d2dde1d0-a903-415f-910a-019b1255c506
-function find_nearest_neighbour_matrices(tree, coords; n=2)
-	idxs_vector_to_real, dists_vector_to_real = 
-		knn(kdtree, coords, n, true)
 	# Convert to a sliceable matrix by splatting (...) and then
 	# h-concatenating the result:
-	dists_to_real = hcat(dists_vector_to_real...)
-	idxs_to_real = hcat(idxs_vector_to_real...)
-	return dists_to_real, idxs_to_real
-end
-
-# ╔═╡ 7bc80b82-3123-4cd4-8066-199dd2466b03
-# Real - real
-begin
-	# Real - real
-	dists_real_to_real, idxs_real_to_real = 
-		find_nearest_neighbour_matrices(kdtree, coords_real_standardised)
-	# Synthetic - real
-	dists_real_to_synth, idxs_real_to_synth = 
-		find_nearest_neighbour_matrices(kdtree, coords_synth_standardised)
-	# Double synthetic - real
-	dists_real_to_synth2, idxs_real_to_synth2 = 
-		find_nearest_neighbour_matrices(kdtree, coords_synth2_standardised)
-	# Triple synthetic - real
-	dists_real_to_synth3, idxs_real_to_synth3 = 
-		find_nearest_neighbour_matrices(kdtree, coords_synth3_standardised)
-end
-
-# ╔═╡ 66814112-046a-4a06-ab07-ab1da7d38491
-md"""
-### Gather the distances
-
-For the real-real nearest-neighbours, we want to take the second-nearest point because the first-nearest is just the point itself.
-
-For all other comparisons, we want the actual nearest point.
-"""
-
-# ╔═╡ 3f815f54-2dd8-44a9-9378-2fb29d330ade
-begin
-	# Distances for the histograms:
-	dists_datasets = [
-		dists_real_to_real[2, :],
-		dists_real_to_synth[1, :],
-		dists_real_to_synth2[1, :],
-		dists_real_to_synth3[1, :]
-	]
-end
-
-# ╔═╡ 20180de0-6069-4721-81f6-86136f740f2b
-md"""
-## Plot the real and synthetic points.
-
-Toggle for whether or not to show the real data in the following plot (`show_real_data` = `true` or `false`):
-"""
-
-# ╔═╡ 6dc00535-c78a-4949-8737-2b5ccb77eccf
-begin
-	# Toggle which data sets to show:
-	show_dataset = [
-		true,  # Real
-		true,  # Synthetic
-		false,  # Double synthetic
-		false   # Triple synthetic
-	]
-	# On the scatter, show lines connecting each synthetic point
-	# from its base point:
-	show_connecting_lines = true
-end
-
-# ╔═╡ 45595315-c467-4504-8f1d-2b533205531f
-begin
-	# Styles for the plots:
-	colours = [:blue, :red, :gold, :green]
-	markers = [:square, :circle, :diamond, :star]
-	labels = ["Real", "Synthetic", "Double synthetic", "Triple synthetic"]
-end
-
-# ╔═╡ 4cacfd0f-903a-4738-a5e9-45ef965e797c
-md"""
-## Scatter
-"""
-
-# ╔═╡ 2d157e77-9cb9-49a7-b868-b3e2c8598e8c
-let
-	# Start a new empty canvas:
-	plot(size=(800, 800 ))
+	vector_normal_2D_array = hcat(vector_normal_2D_list...)
 	
-	for (i, data) in enumerate(coords_datasets)
-		if show_dataset[i] == true
-			# Scatter the data:
-			scatter!(
-				data[1, :],
-				data[2, :],
-				label=labels[i],
-				markercolor=colours[i],
-				markershape=markers[i],
-				linecolor=:black,
-				markeralpha=0.5
-				)
+end
 
+# ╔═╡ 6521f4b5-738b-4126-ad8e-767f52510939
+md"""Convert to azimuthal angles for comparison with the random points"""
 
-			if (show_connecting_lines == true) & (i > 1) 
-				# Need this condition separately or it'll try to access
-				# show_dataset[0] which doesn't exist with 1-indexing.
-				if show_dataset[i - 1] == true
-					# Plot lines between each synthetic point
-					# and the real point it came from.
-					for (j, x) in enumerate(data[1, :])
-						plot!(
-							[coords_base_data[i-1][1, j], data[1, j]],
-							[coords_base_data[i-1][2, j], data[2, j]],
-							linecolor=:black,
-							linealpha=0.1,
-							label=""
-						)
-					end
-				end
-			end
-			
-		end
-	end
-	
-	ylabel!("y")
+# ╔═╡ dec6396c-e100-4497-97ee-4ab759a2a8d5
+azi_normal = atan.(
+			vector_normal_2D_array[2, :], vector_normal_2D_array[1, :]
+		)
+
+# ╔═╡ f6fc599d-458b-40cc-baf3-37665a311ba9
+md"""### Plot"""
+
+# ╔═╡ 1335a46a-dd5f-4769-abb4-b48cf2c838e2
+begin
+	# Plot these points:
+	p1 = scatter(
+		x_random_2D,
+		y_random_2D,
+		label="Random",
+		opacity=0.5;
+		aspect_ratio=1.0
+	)
 	xlabel!("x")
+	ylabel!("y")
 
+	# Plot the result:
+	p2 = scatter(
+		vector_normal_2D_array[1, :],
+		vector_normal_2D_array[2, :],
+		label="Normal",
+		opacity=0.5;
+		aspect_ratio=1.0
+	)
+	xlabel!("x")
+	ylabel!("y")
+	
+	plot(p1, p2, layout=(1, 2))
 end
 
-# ╔═╡ 3597893e-aeeb-4a4a-ac1b-5719616cc221
-# ╠═╡ disabled = true
-#=╠═╡
+# ╔═╡ 738b26ac-d543-48c6-999e-dc5b5649235d
+begin
+	bins = LinRange(-pi, pi, 20)
+	
+	plot(size=(600, 400))
+	histogram!(
+		azi_random,
+		bins=bins,
+		label="Random", 
+		color="blue",  # false for transparency
+		linecolor="blue",
+		opacity=0.2
+		)
+	histogram!(
+		azi_normal,
+		bins=bins,
+		label="Normal",
+		color="orange",
+		linecolor="orange",
+		opacity=0.2
+		)
+end
+
+# ╔═╡ 4cf3a3a8-d00d-4c9a-917f-892fc19bafab
 md"""
-Julia notes:
+## 3D 
 
-+ "Splatting", the `...` in `plot_links...`, is the equivalent of python's `*plot_links` for the list called `plot_links`.
-
-+ `attr` is the equivalent of a python `dict`.
-
-+ plotly for python expects to receive customdata in columns, but plotly for Julia expects to receive it in rows. (Why?!)
+Generate points on a sphere:
+1. from the rand() function
+2. by sampling the normal distribution
 """
 
-begin
-
-	# TO DO - can I just draw the traces directly?
-	# Start with an empty list that will contain the traces:
-	# (n.b. "trace" is one group of plotted things)
-	trace_list = GenericTrace[]
-
-	# Scatter the synthetic points:
-	scatter_synth =	scatter(
-		x=coords_synth[1, :],
-		y=coords_synth[2, :],
-		mode="markers",
-		name="Synthetic data",
-		customdata=transpose(hcat(
-			coords_real_for_synth[1, :], 
-			coords_real_for_synth[2, :]
-		)),
-		marker=attr(line=attr(color="black", width=1.0)),
-		opacity=0.5,
-		hovertemplate=(
-			"(%{x:.1f}, %{y:.3f})" *
-			"<br>" *
-			"From real point: (%{customdata[0]:.1f}, %{customdata[1]:.3f})"
-			# "<extra></extra>"
-			)
-		)
-	# Add this trace to the list:
-	push!(trace_list, scatter_synth)
-
-	if show_real_data == true
-		# Scatter the real data:
-		scatter_real = scatter(
-			x=coords_real[1, :],
-			y=coords_real[2, :],
-			mode="markers",
-			name="Real data",
-			marker=attr(symbol="square", line=attr(color="black", width=1.0)),
-			opacity=0.5,
-			hovertemplate=("(%{x:.1f}, %{y:.3f})")
-			)
-		# Add this trace to the list:
-		push!(trace_list, scatter_real)
-		
-		# Plot lines between each synthetic point
-		# and the real point it came from.
-		for (i, x) in enumerate(coords_synth[1, :])
-			plot_link = scatter(
-				x=[coords_real_for_synth[1, i], coords_synth[1, i]],
-				y=[coords_real_for_synth[2, i], coords_synth[2, i]],
-				mode="lines",
-				showlegend=false,
-				line=attr(color="black"),
-				opacity=0.3
-			)
-			# Add this trace to the list:
-			push!(trace_list, plot_link)
-		end
-	end
-	
-	layout = 
-	    Layout(
-			yaxis_title="y",
-			xaxis_title="x",
-			height=600
-		)
-	
-	Plot(trace_list, layout)
-end
-  ╠═╡ =#
-
-# ╔═╡ ecce6332-dac6-4dd7-ae98-184f7dad890f
-# ╠═╡ disabled = true
-#=╠═╡
-let
-	fig = figure()
-	fig.set_size_inches(8, 8)
-	ax = PyPlot.axes()
-
-	for (i, data) in enumerate(coords_datasets)
-		if show_dataset[i] == true
-			# Scatter the data:
-			scatter(
-				x=data[1, :],
-				y=data[2, :],
-				
-				label=labels[i],
-				color=colours[i],
-				marker=markers[i],
-				edgecolor="k",
-				alpha=0.5
-				)
-		
-
-			if (show_connecting_lines == true) & (i > 1) 
-				# Need this condition separately or it'll try to access
-				# show_dataset[0] which doesn't exist with 1-indexing.
-				if show_dataset[i - 1] == true
-					# Plot lines between each synthetic point
-					# and the real point it came from.
-					for (j, x) in enumerate(data[1, :])
-						plot(
-							[coords_base_data[i-1][1, j], data[1, j]],
-							[coords_base_data[i-1][2, j], data[2, j]],
-							color="k",
-							alpha=0.1
-						)
-					end
-				end
-			end
-			
-		end
-	end
-
-	ylabel("y")
-	xlabel("x")
-
-	legend()
-	
-	figure=PyPlot.gcf()
-end
-  ╠═╡ =#
-
-# ╔═╡ bff4ef55-ecd4-4406-a69b-fce9fcb79ffc
+# ╔═╡ d0cb7686-7d36-479a-9b8f-d050310f0ad7
 md"""
-## Histograms
+### Random
+
+Can use the same azimuthal angles as earlier, but not the same x and y coordinates exactly as they all had z=0. Now need to generate new altitude angles and then re-normalise to make sure the resulting vector has a length of `radius`. 
 """
 
-# ╔═╡ 634eef0e-fc61-44ac-bbe4-86129c0f76dd
-md"""Define shared bins for the histrograms."""
+# ╔═╡ be25bfc8-3a13-4239-b958-1fb3889d6174
+begin	
+	# Set random seed
+	# (different from the azi angle random seed otherwise get 
+	# weird results - points are too ordered)
+	seed!(random_seed + 1)
+	
+	# Generate altitude angles
+	# ranging from -90 to +90 degrees:
+	alt_random = (0.5 * pi) .- (pi * rand(M))
 
-# ╔═╡ 20e362ac-aaad-4550-b132-aeed5e0e7041
+	# Convert these to z coordinates using trigonometry:
+	z_random_3D = radius .* sin.(alt_random)
+
+	# Calculate the projected length of the `radius` line in the x-y plane:
+	radius_xy = radius .* cos.(alt_random)
+
+	# Calculate new x, y coordinates using the same azimuthal angles
+	# as in the 2D case:
+	x_random_3D = radius_xy .* cos.(azi_random)
+	y_random_3D = radius_xy .* sin.(azi_random)
+
+	# Combine x, y, and z into one array:
+	vector_random_3D_array = transpose(hcat(x_random_3D, y_random_3D, z_random_3D))
+end
+
+# ╔═╡ 1a0d17ab-71ed-4a59-9989-9fe1e4ef77a4
 begin
-	# Maximum distance in each data set:
-	max_dists = [maximum(dists) for dists in dists_datasets]
-	bin_max = maximum([maximum(dists) for dists in max_dists])
-	step = 0.05
-	# bins = range(0.0, stop=bin_max + step, step=step)
-	bins = LinRange(0.0, bin_max, 30)  # Equivalent of linspace()
-end
-
-# ╔═╡ 26dc69c7-93ec-4650-b8da-3f3f218404a8
-# ╠═╡ disabled = true
-#=╠═╡
-let
-	fig = figure()
-	fig.set_size_inches(8, 5)
-	ax = PyPlot.axes()
-
-	for (i, dist) in enumerate(dists_datasets)
-		hist(
-			x=dist,
-			bins=bins,
-			label=labels[i] * " - real",
-			# color=colours[i],
-			edgecolor=colours[i],
-			# alpha=0.5,
-			histtype="step",
-			density=true
-			)
+	# Check the magnitude (a.k.a. norm, length) of these vectors:
+	mags_random_3D_array = []
+	for i in range(1, M)
+		mags_random_3D = norm(vector_random_3D_array[:, i])
+		push!(mags_random_3D_array, mags_random_3D)
 	end
-	legend()
-
-	ylabel("Frequency density")
-	xlabel("Distance to nearest-neighbour")
-
-	figure=PyPlot.gcf()
+	mags_random_3D_array
 end
-  ╠═╡ =#
 
-# ╔═╡ 23e8b570-bd98-4323-a232-b40b0efab2e2
-let
-	# Start a new empty canvas:
-	plot()
+# ╔═╡ 95ce3ba5-ae72-4559-b66a-d66809f8f951
+md"""### Normal"""
 
-	for (i, dist) in enumerate(dists_datasets)
-		# Step histogram = no vertical lines to zero at bin borders
-		stephist!(
-			dist,
-			bins=bins,
-			label=labels[i] * " - real",
-			color=false,  # transparency
-			linecolor=colours[i],
-			# linealpha=0.5,
-			normalize=true
-			)
+# ╔═╡ 93836a8a-eb95-498c-97a3-4c65f737d01a
+begin
+	# Set random seed
+	seed!(random_seed)
+
+	# Put the vectors in here:
+	vector_normal_3D_list = []
+	for i in range(1, M)
+		# Define random vector:
+		vector_normal_3D = rand(Normal(), 3)
+		# Divide by its norm (a.k.a. magnitude):
+		vector_normal_3D /= norm(vector_normal_3D)
+		# Multiply by the required radius:
+		vector_normal_3D *= radius
+		# Add it to the list:
+		push!(vector_normal_3D_list, vector_normal_3D)
 	end
 
-	ylabel!("Frequency density")
-	xlabel!("Distance to nearest-neighbour")
-
-	# Setting the top limit to infinity keeps the default ymax
-	# and allows us to set ymin separately.
-	ylims!(0, Inf)
-
+	# Convert to a sliceable matrix by splatting (...) and then
+	# h-concatenating the result:
+	vector_normal_3D_array = hcat(vector_normal_3D_list...)
+	
 end
+
+# ╔═╡ 2ead0c99-3c4e-412f-a0e6-eba419ca44b2
+md"""Convert the points to alt/az for comparison with the random set"""
+
+# ╔═╡ ab98f0dc-b2b1-4ea0-97ee-3b2342fd6360
+begin
+	# Altitudes:
+	alt_normal = asin.(vector_normal_3D_array[3, :] ./ radius)
+	# Azimuths:
+	azi_normal_3D = atan.(
+			vector_normal_3D_array[2, :], vector_normal_3D_array[1, :]
+		)
+end
+
+# ╔═╡ 85eae205-6414-4179-ae0f-e2ae14e71f20
+md"""### Plot"""
+
+# ╔═╡ bd869c78-9111-49d5-b40f-2566a837d1ca
+axis_limit = radius * 1.1
+
+# ╔═╡ 68e5f8ce-901c-4aa7-b7bc-fd7a36e38023
+viewing_angle = "view_xy"
+
+# ╔═╡ 07493097-5e10-42b2-b307-d115890ac71b
+begin
+	if viewing_angle == "view_xy"
+		view_az = 90
+		view_alt = 90
+	elseif viewing_angle == "view_xz"
+		view_az = 0
+		view_alt = 0
+	elseif viewing_angle == "view_yz"
+		view_az = 90
+		view_alt = 0
+	elseif viewing_angle == "default"
+		view_az = 60
+		view_alt = 30
+	end
+end
+
+# ╔═╡ bd256f66-4c9f-4ed0-94bf-3008b2db15c9
+begin
+	# Plot these points:
+	p1_3D = scatter(
+		x_random_3D,
+		y_random_3D,
+		z_random_3D,
+		label="Random",
+		opacity=0.5;
+		aspect_ratio=1.0
+	)
+	# Draw line connections to the origin:
+	for i in range(1, M)
+		plot!(
+			[x_random_3D[i], 0],
+			[y_random_3D[i], 0],
+			[z_random_3D[i], 0],
+			label=false,  # Don't show in the legend
+			color="black",
+			opacity=0.1
+		)
+	end
+	xlabel!("x")
+	ylabel!("y")
+	zlabel!("z")
+	xlims!(-axis_limit, axis_limit)
+	ylims!(-axis_limit, axis_limit)
+	zlims!(-axis_limit, axis_limit)
+
+	# Plot the result:
+	p2_3D = scatter(
+		vector_normal_3D_array[1, :],
+		vector_normal_3D_array[2, :],
+		vector_normal_3D_array[3, :],
+		label="Normal",
+		opacity=0.5;
+		aspect_ratio=1.0
+	)
+	# Draw line connections to the origin:
+	for i in range(1, M)
+		plot!(
+			[vector_normal_3D_array[1, i], 0],
+			[vector_normal_3D_array[2, i], 0],
+			[vector_normal_3D_array[3, i], 0],
+			label=false,  # Don't show in the legend
+			color="black",
+			opacity=0.1
+		)
+	end
+	xlabel!("x")
+	ylabel!("y")
+	zlabel!("z")
+	xlims!(-axis_limit, axis_limit)
+	ylims!(-axis_limit, axis_limit)
+	zlims!(-axis_limit, axis_limit)
+	
+	plot(
+		p1_3D, p2_3D,
+		layout=(2, 1),               # Subplot number of rows, number of columns
+		camera=(view_az, view_alt),  # Angles to view the plot from 
+		size=(400, 900)              # Figure size
+	)
+end
+
+# ╔═╡ 29de118f-7b81-487e-aa36-271acff17a64
+begin
+	plot(size=(600, 400))
+	histogram!(
+		azi_random,
+		bins=bins,
+		label="Random", 
+		color="blue",  # transparency
+		linecolor="blue",
+		opacity=0.2
+		)
+	histogram!(
+		azi_normal_3D,
+		bins=bins,
+		label="Normal",
+		color="orange",
+		linecolor="orange",
+		opacity=0.2
+		)
+end
+
+# ╔═╡ 51786c07-73c3-4641-a46d-b15195161cd8
+begin
+	bins_alt = LinRange(-pi*0.5, pi*0.5, 20)
+		
+	plot(size=(600, 400))
+	histogram!(
+		alt_random,
+		bins=bins_alt,
+		label="Random", 
+		color="blue",  # false for transparency
+		linecolor="blue",
+		opacity=0.2
+		)
+	histogram!(
+		alt_normal,
+		bins=bins_alt,
+		label="Normal",
+		color="orange",
+		linecolor="orange",
+		opacity=0.2
+	)
+end
+
+# ╔═╡ f180c979-b9a8-476e-a740-5bc1d91d6984
+md"""
+## Why does altitude need a normal distribution?
+
+Changing the altitude angle affects the value of the z-coordinate. The size of that change depends on the starting altitude angle. 
+
+The plot below shows the resulting change in z (y-axis) for a fixed change in altitude angle of 1 degree, where that change is applied to various starting altitudes (x-axis).
+"""
+
+# ╔═╡ 2da4076f-f452-4466-a3f9-b80fede050c4
+begin
+	dphi_deg = 1.0
+	dphi = (dphi_deg / 180.0) * pi  # Convert to radians
+	phi_list = LinRange(-pi*0.5, pi*0.5, 180)
+	dz_list = sin.(phi_list .+ dphi) - sin.(phi_list)
+
+	plot(phi_list, dz_list, label=false)
+	xlabel!("Altitude")
+	ylabel!("Difference in z")
+end
+
+# ╔═╡ c749e231-1f01-407f-9a4e-c6b4056ad7af
+md"""
+On a sphere, the change in z is large near the equator and small near the poles.
+
+We want our final points to be evenly-distributed in z, not in altitude angle. To ensure that, we need lots of altitude angles that are small (near zero) so that the starting point at z=0 samples a lot of points near z=0. We don't need as many large altitude angles as all of those values will bunch up at the poles.
+"""
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
-NearestNeighbors = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
-Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
-StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 
 [compat]
 Distributions = "~0.25.80"
-NearestNeighbors = "~0.4.13"
 Plots = "~1.38.5"
-StatsBase = "~0.33.21"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
@@ -903,7 +420,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.8.5"
 manifest_format = "2.0"
-project_hash = "c8b1f4561a1321a13f2664308b264b13742e10a5"
+project_hash = "315e49dbf367f7e90915553901add6c044771c50"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
@@ -946,9 +463,9 @@ version = "1.15.7"
 
 [[deps.ChangesOfVariables]]
 deps = ["ChainRulesCore", "LinearAlgebra", "Test"]
-git-tree-sha1 = "844b061c104c408b24537482469400af6075aae4"
+git-tree-sha1 = "485193efd2176b88e6622a39a246f8c5b600e74e"
 uuid = "9e997f8a-9a97-42d5-a9f1-ce6bfc15e2c0"
-version = "0.1.5"
+version = "0.1.6"
 
 [[deps.CodecZlib]]
 deps = ["TranscodingStreams", "Zlib_jll"]
@@ -982,9 +499,9 @@ version = "0.12.10"
 
 [[deps.Compat]]
 deps = ["Dates", "LinearAlgebra", "UUIDs"]
-git-tree-sha1 = "00a2cccc7f098ff3b66806862d275ca3db9e6e5a"
+git-tree-sha1 = "61fdd77467a5c3ad071ef8277ac6bd6af7dd4c04"
 uuid = "34da2185-b29b-5c13-b0c7-acf172513d20"
-version = "4.5.0"
+version = "4.6.0"
 
 [[deps.CompilerSupportLibraries_jll]]
 deps = ["Artifacts", "Libdl"]
@@ -1020,12 +537,6 @@ deps = ["InverseFunctions", "Test"]
 git-tree-sha1 = "80c3e8639e3353e5d2912fb3a1916b8455e2494b"
 uuid = "b429d917-457f-4dbc-8f4c-0cc954292b1d"
 version = "0.4.0"
-
-[[deps.Distances]]
-deps = ["LinearAlgebra", "SparseArrays", "Statistics", "StatsAPI"]
-git-tree-sha1 = "3258d0659f812acde79e8a74b11f17ac06d0ca04"
-uuid = "b4f34e82-e78d-54a5-968a-f98e89d6e8f7"
-version = "0.10.7"
 
 [[deps.Distributions]]
 deps = ["ChainRulesCore", "DensityInterface", "FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SparseArrays", "SpecialFunctions", "Statistics", "StatsBase", "StatsFuns", "Test"]
@@ -1205,10 +716,10 @@ uuid = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 version = "0.21.3"
 
 [[deps.JpegTurbo_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "b53380851c6e6664204efb2e62cd24fa5c47e4ba"
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "6f2675ef130a300a112286de91973805fcc5ffbc"
 uuid = "aacddb02-875f-59d6-b918-886e6ef4fbf8"
-version = "2.1.2+0"
+version = "2.1.91+0"
 
 [[deps.LAME_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -1315,9 +826,9 @@ uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 
 [[deps.LogExpFunctions]]
 deps = ["ChainRulesCore", "ChangesOfVariables", "DocStringExtensions", "InverseFunctions", "IrrationalConstants", "LinearAlgebra"]
-git-tree-sha1 = "45b288af6956e67e621c5cbb2d75a261ab58300b"
+git-tree-sha1 = "071602a0be5af779066df0d7ef4e14945a010818"
 uuid = "2ab3a3ac-af41-5b50-aa03-7779005ae688"
-version = "0.3.20"
+version = "0.3.22"
 
 [[deps.Logging]]
 uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
@@ -1369,15 +880,9 @@ version = "2022.2.1"
 
 [[deps.NaNMath]]
 deps = ["OpenLibm_jll"]
-git-tree-sha1 = "a7c3d1da1189a1c2fe843a3bfa04d18d20eb3211"
+git-tree-sha1 = "0877504529a3e5c3343c6f8b4c0381e57e4387e4"
 uuid = "77ba4419-2d1f-58cd-9bb1-8ffee604a2e3"
-version = "1.0.1"
-
-[[deps.NearestNeighbors]]
-deps = ["Distances", "StaticArrays"]
-git-tree-sha1 = "2c3726ceb3388917602169bed973dbc97f1b51a8"
-uuid = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
-version = "0.4.13"
+version = "1.0.2"
 
 [[deps.NetworkOptions]]
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
@@ -1441,9 +946,9 @@ version = "0.11.16"
 
 [[deps.Parsers]]
 deps = ["Dates", "SnoopPrecompile"]
-git-tree-sha1 = "946b56b2135c6c10bbb93efad8a78b699b6383ab"
+git-tree-sha1 = "6f4fbcd1ad45905a5dee3f4256fabb49aa2110c6"
 uuid = "69de0a69-1ddd-5017-9359-2bf0b02dc9f0"
-version = "2.5.6"
+version = "2.5.7"
 
 [[deps.Pipe]]
 git-tree-sha1 = "6842804e7867b115ca9de748a0cf6b364523c16d"
@@ -1497,9 +1002,9 @@ version = "5.15.3+2"
 
 [[deps.QuadGK]]
 deps = ["DataStructures", "LinearAlgebra"]
-git-tree-sha1 = "de191bc385072cc6c7ed3ffdc1caeed3f22c74d4"
+git-tree-sha1 = "786efa36b7eff813723c4849c90456609cf06661"
 uuid = "1fd47b50-473d-5c70-9696-f719f8f3bcdc"
-version = "2.7.0"
+version = "2.8.1"
 
 [[deps.REPL]]
 deps = ["InteractiveUtils", "Markdown", "Sockets", "Unicode"]
@@ -1540,15 +1045,15 @@ version = "1.3.0"
 
 [[deps.Rmath]]
 deps = ["Random", "Rmath_jll"]
-git-tree-sha1 = "bf3188feca147ce108c76ad82c2792c57abe7b1f"
+git-tree-sha1 = "f65dcb5fa46aee0cf9ed6274ccbd597adc49aa7b"
 uuid = "79098fc4-a85e-5d69-aa6a-4863f24498fa"
-version = "0.7.0"
+version = "0.7.1"
 
 [[deps.Rmath_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "68db32dff12bb6127bac73c209881191bf0efbb7"
+git-tree-sha1 = "6ed52fdd3382cf21947b15e8870ac0ddbff736da"
 uuid = "f50d1b31-88e8-58de-be2c-1cc44531875f"
-version = "0.3.0+0"
+version = "0.4.0+0"
 
 [[deps.SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
@@ -1598,17 +1103,6 @@ deps = ["ChainRulesCore", "IrrationalConstants", "LogExpFunctions", "OpenLibm_jl
 git-tree-sha1 = "d75bda01f8c31ebb72df80a46c88b25d1c79c56d"
 uuid = "276daf66-3868-5448-9aa4-cd146d93841b"
 version = "2.1.7"
-
-[[deps.StaticArrays]]
-deps = ["LinearAlgebra", "Random", "StaticArraysCore", "Statistics"]
-git-tree-sha1 = "6954a456979f23d05085727adb17c4551c19ecd1"
-uuid = "90137ffa-7385-5640-81b9-e52037218182"
-version = "1.5.12"
-
-[[deps.StaticArraysCore]]
-git-tree-sha1 = "6b7ba252635a5eff6a0b0664a41ee140a1c9e72a"
-uuid = "1e83bf80-4336-4d27-bf5d-d5a4f845583c"
-version = "1.4.0"
 
 [[deps.Statistics]]
 deps = ["LinearAlgebra", "SparseArrays"]
@@ -1663,9 +1157,9 @@ uuid = "3bb67fe8-82b1-5028-8e26-92a6c54297fa"
 version = "0.9.11"
 
 [[deps.URIs]]
-git-tree-sha1 = "ac00576f90d8a259f2c9d823e91d1de3fd44d348"
+git-tree-sha1 = "074f993b0ca030848b897beff716d93aca60f06a"
 uuid = "5c2747f8-b7ea-4ff2-ba2e-563bfd36b1d4"
-version = "1.4.1"
+version = "1.4.2"
 
 [[deps.UUIDs]]
 deps = ["Random", "SHA"]
@@ -1917,66 +1411,37 @@ version = "1.4.1+0"
 """
 
 # ╔═╡ Cell order:
-# ╟─78249b6e-9d72-11ed-2c77-a51efb914f64
-# ╟─a35d9b03-162f-4367-9360-f751e7a42963
-# ╠═f3409cd7-185b-4a35-925e-0d38ea1de729
-# ╟─d15f0f81-ab21-4ad8-95ea-393ca4ba46c9
-# ╠═40f0420c-6998-4264-8cf9-16291ea03e52
-# ╟─5269cdf0-2a11-4d1b-803a-78a2c7231d35
-# ╠═d860a3e7-958f-4919-9db5-658b58ed6b20
-# ╟─6e1d209c-8080-4450-95a1-779ba5958c5e
-# ╠═199a9109-2919-47e4-8b20-f1a1eb311177
-# ╟─3623d487-93ae-4a23-a316-9490889173d8
-# ╠═1061dd5b-9a6a-4319-90d8-3c9c59ab92f6
-# ╟─012824a4-deac-4f3a-95b8-cd349077c6e6
-# ╟─98d1178d-2936-4fd6-82d9-ac5fa5b4f637
-# ╟─27d9108f-6ec8-4b0f-8ec3-1a05e4a11064
-# ╠═96747592-972b-431e-891f-879a3695ad6a
-# ╟─6b279292-6195-4a86-8185-18833c032c7d
-# ╠═836e7b57-cfcd-45ca-8eb4-534aca5c563a
-# ╟─f9ebe451-2eeb-4675-918d-7cbf23fa616d
-# ╠═4c90f881-c058-4bb4-ba77-62f74f996478
-# ╟─148c7d7c-00ab-44c6-8271-867090f6bdb3
-# ╠═a85ace51-d5ba-459b-ab92-ed4d75b71c4b
-# ╟─8099cd6e-74c1-4411-b8da-0f6e5a37284c
-# ╠═39922ca7-b567-4c86-8fbc-ccb732504434
-# ╟─9fe64e5c-dfdf-447f-9bfb-403e0c8c30ac
-# ╠═d956b888-b453-44f9-a675-73dd492e3d2e
-# ╟─c22ef8c8-0f20-41f7-bf2b-999c7bf94ba4
-# ╠═6471625a-9691-452d-aa2c-f77215a33dae
-# ╟─d4aad585-d916-49b9-bca1-d0bbc1212103
-# ╠═1e92cea5-e980-417b-a7ac-407a648503d7
-# ╟─2741adb2-4ceb-47c9-ac78-7cef038e7371
-# ╠═989369dd-aaf5-4e63-9ea8-956008db525f
-# ╟─ada78b87-3e16-4c5e-9f5b-c2ed17805ec1
-# ╠═3e3ce823-7c8e-4f24-9383-2eb3ff17fcac
-# ╟─7aa64e01-8e92-4110-9b6b-041766a9a9ba
-# ╠═484e61cd-e0e7-4abc-81cd-c1ad04edf7f2
-# ╠═b220f5c9-de8e-4f78-9712-2edcf8dc2e53
-# ╠═279cf589-0e85-441c-b309-dd470c25e656
-# ╟─43bb6106-874c-4857-8900-ee9185fcb1fd
-# ╠═0f81692d-2ede-4c21-a3b1-a35c36d67723
-# ╟─57609186-5331-4f3b-a648-31afa38c823e
-# ╟─94c7164e-f1ca-41be-ab7b-98950f279573
-# ╠═42af1204-8422-4b08-ae2c-9c9646ab3a1f
-# ╟─d15afb2a-5c45-4f7f-9ead-18b1c873a907
-# ╠═23cfd495-db72-4cea-8e50-4dc2c84bb124
-# ╟─01fa93d7-14db-49db-8873-15599a542ec7
-# ╠═d2dde1d0-a903-415f-910a-019b1255c506
-# ╠═7bc80b82-3123-4cd4-8066-199dd2466b03
-# ╟─66814112-046a-4a06-ab07-ab1da7d38491
-# ╠═3f815f54-2dd8-44a9-9378-2fb29d330ade
-# ╟─20180de0-6069-4721-81f6-86136f740f2b
-# ╠═6dc00535-c78a-4949-8737-2b5ccb77eccf
-# ╠═45595315-c467-4504-8f1d-2b533205531f
-# ╟─4cacfd0f-903a-4738-a5e9-45ef965e797c
-# ╠═2d157e77-9cb9-49a7-b868-b3e2c8598e8c
-# ╟─3597893e-aeeb-4a4a-ac1b-5719616cc221
-# ╟─ecce6332-dac6-4dd7-ae98-184f7dad890f
-# ╟─bff4ef55-ecd4-4406-a69b-fce9fcb79ffc
-# ╟─634eef0e-fc61-44ac-bbe4-86129c0f76dd
-# ╠═20e362ac-aaad-4550-b132-aeed5e0e7041
-# ╟─26dc69c7-93ec-4650-b8da-3f3f218404a8
-# ╠═23e8b570-bd98-4323-a232-b40b0efab2e2
+# ╟─01f723a3-3978-4fab-962b-22b278e4cfc6
+# ╟─f36f5920-6f0c-41c8-a7e1-2cfc7f9bc2a5
+# ╠═18c9ac0f-6954-4ee3-98bd-5587a3d74601
+# ╠═08bbf92d-cd5a-4e56-816a-0d50f80de7bf
+# ╟─8ba67bee-47aa-4fc7-89e1-4406dcbb6af4
+# ╟─a7e6e39e-24c8-476a-aab1-04ef027ce31d
+# ╠═37b2b812-b100-11ed-2447-3b9083ab9792
+# ╟─a4824cf3-485f-42fd-963e-2992e9999701
+# ╠═4a800091-0694-4f1e-98e4-3d18543672dd
+# ╟─6521f4b5-738b-4126-ad8e-767f52510939
+# ╠═dec6396c-e100-4497-97ee-4ab759a2a8d5
+# ╟─f6fc599d-458b-40cc-baf3-37665a311ba9
+# ╠═1335a46a-dd5f-4769-abb4-b48cf2c838e2
+# ╠═738b26ac-d543-48c6-999e-dc5b5649235d
+# ╟─4cf3a3a8-d00d-4c9a-917f-892fc19bafab
+# ╟─d0cb7686-7d36-479a-9b8f-d050310f0ad7
+# ╠═be25bfc8-3a13-4239-b958-1fb3889d6174
+# ╠═1a0d17ab-71ed-4a59-9989-9fe1e4ef77a4
+# ╟─95ce3ba5-ae72-4559-b66a-d66809f8f951
+# ╠═93836a8a-eb95-498c-97a3-4c65f737d01a
+# ╟─2ead0c99-3c4e-412f-a0e6-eba419ca44b2
+# ╠═ab98f0dc-b2b1-4ea0-97ee-3b2342fd6360
+# ╟─85eae205-6414-4179-ae0f-e2ae14e71f20
+# ╠═bd869c78-9111-49d5-b40f-2566a837d1ca
+# ╠═68e5f8ce-901c-4aa7-b7bc-fd7a36e38023
+# ╠═07493097-5e10-42b2-b307-d115890ac71b
+# ╠═bd256f66-4c9f-4ed0-94bf-3008b2db15c9
+# ╠═29de118f-7b81-487e-aa36-271acff17a64
+# ╠═51786c07-73c3-4641-a46d-b15195161cd8
+# ╟─f180c979-b9a8-476e-a740-5bc1d91d6984
+# ╠═2da4076f-f452-4466-a3f9-b80fede050c4
+# ╟─c749e231-1f01-407f-9a4e-c6b4056ad7af
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
